@@ -1,4 +1,12 @@
-v1.0.4 — 2025-11-05
+v1.0.5 — 2025-11-05
+
+Changed files:
+- .gh_release_body.md
+- artifacts/eject-v1.0.4.zip
+- eject.php
+- package/eject/CHANGELOG.md
+- package/eject/eject.php
+- release.shv1.0.4 — 2025-11-05
 
 Changed files:
 - README.md
