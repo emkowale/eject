@@ -134,30 +134,32 @@ php -r "$fix_php" "$MAIN_PATH" "$NEXT" "$PLUGIN_SLUG" 2>/dev/null || true
 git add -A
 git commit -m "chore(release): v${NEXT} (bump)" >/dev/null 2>&1 || true
 
-# --- Build the Changed Files list against last tag ----------------------------
-step "Update CHANGELOG.md"
-TODAY="$(date +%Y-%m-%d)"
+# --- Compute changed files SINCE LAST TAG (for release notes) -----------------
 LAST_TAG="$(git describe --tags --abbrev=0 2>/dev/null || echo '')"
 RANGE="${LAST_TAG:+$LAST_TAG..}HEAD"
-
 CHANGED="$(git diff --name-only ${RANGE} | grep -v '^CHANGELOG\.md$' || true)"
 if [[ -z "$CHANGED" && -z "$LAST_TAG" ]]; then
   CHANGED="$(git ls-files | grep -v '^CHANGELOG\.md$' || true)"
 fi
 
-{
-  printf "v%s — %s\n\n" "$NEXT" "$TODAY"
-  echo "Changed files:"
-  if [[ -n "$CHANGED" ]]; then
-    echo "$CHANGED" | sed 's/^/- /'
-    echo
-  else
-    echo "- (none)"
-    echo
-  fi
-  [[ -f CHANGELOG.md ]] && cat CHANGELOG.md
-} > .CHANGELOG.new
+TODAY="$(date +%Y-%m-%d)"
+NEW_TOP=$(
+  {
+    printf "v%s — %s\n\n" "$NEXT" "$TODAY"
+    echo "Changed files:"
+    if [[ -n "$CHANGED" ]]; then
+      echo "$CHANGED" | sed 's/^/- /'
+      echo
+    else
+      echo "- (none)"
+      echo
+    fi
+  }
+)
 
+# --- Write CHANGELOG (prepend) ------------------------------------------------
+step "Update CHANGELOG.md"
+{ printf "%s" "$NEW_TOP"; [[ -f CHANGELOG.md ]] && cat CHANGELOG.md; } > .CHANGELOG.new
 mv .CHANGELOG.new CHANGELOG.md
 git add CHANGELOG.md
 git commit -m "chore(release): v${NEXT} (changelog)" >/dev/null 2>&1 || true
@@ -184,14 +186,22 @@ fi
 ( cd package && zip -qr "../${ART}/${ZIP}" "${PLUGIN_SLUG}" )
 ok "Built ${ART}/${ZIP}"
 
-# --- GitHub release (optional) ------------------------------------------------
+# --- GitHub release using NEW_TOP as body -------------------------------------
 if command -v gh >/dev/null 2>&1; then
   step "GitHub release v${NEXT}"
+  BODY_FILE=".gh_release_body.md"
+  {
+    printf "%s" "$NEW_TOP"
+    [[ -f CHANGELOG.md ]] && awk 'NR==1{exit} {print}' CHANGELOG.md >/dev/null # keep only NEW_TOP in body
+  } > "$BODY_FILE"
+
   if gh release view "v${NEXT}" >/dev/null 2>&1; then
+    gh release edit "v${NEXT}" -F "$BODY_FILE" >/dev/null
     gh release upload "v${NEXT}" "${ART}/${ZIP}" --clobber >/dev/null
   else
-    gh release create "v${NEXT}" "${ART}/${ZIP}" -t "v${NEXT}" -n "Release ${NEXT}" >/dev/null
+    gh release create "v${NEXT}" "${ART}/${ZIP}" -t "v${NEXT}" -F "$BODY_FILE" >/dev/null
   fi
+  rm -f "$BODY_FILE"
   ok "Published"
 else
   warn "gh not installed; skipped GitHub release"
