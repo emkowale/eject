@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Universal WP plugin release script: bump, changelog (changed files), push (local wins), zip, tag, GH release
-set -euo pipefail
+set -Eeuo pipefail
 
 # ====== EDIT THESE FOR EACH PLUGIN ============================================
 OWNER="emkowale"
@@ -19,10 +19,14 @@ die(){  printf "${C4}❌ %s${C0}\n" "$*"; exit 1; }
 trap 'printf "${C4}❌ Failed at line %s${C0}\n" "$LINENO"' ERR
 
 BUMP="${1:-patch}"; [[ "$BUMP" =~ ^(major|minor|patch)$ ]] || die "Usage: ./release.sh {major|minor|patch}"
-command -v git >/dev/null || die "git not found"; command -v php >/dev/null || die "php not found"; command -v zip >/dev/null || die "zip not found"
+command -v git >/dev/null || die "git not found"
+command -v php >/dev/null || die "php not found"
+command -v zip >/dev/null || die "zip not found"
+command -v rsync >/dev/null || die "rsync not found"
 
 # --- Locate repo root (allow running from one level under) --------------------
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; cd "$ROOT"; [[ -d .git ]] || { [[ -d ../.git ]] && cd .. || true; }
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; cd "$ROOT"
+[[ -d .git ]] || { [[ -d ../.git ]] && cd .. || true; }
 
 # --- Init repo if needed ------------------------------------------------------
 if [[ ! -d .git ]]; then
@@ -33,9 +37,13 @@ if [[ ! -d .git ]]; then
 fi
 
 # --- Resolve source dir and main file -----------------------------------------
-if [[ -f "${PLUGIN_SLUG}/${MAIN_FILE}" ]]; then SRC_DIR="${PLUGIN_SLUG}"; MAIN_PATH="${PLUGIN_SLUG}/${MAIN_FILE}"
-elif [[ -f "${MAIN_FILE}" ]]; then SRC_DIR="."; MAIN_PATH="${MAIN_FILE}"
-else die "Cannot find ${MAIN_FILE} (root or ${PLUGIN_SLUG}/)"; fi
+if [[ -f "${PLUGIN_SLUG}/${MAIN_FILE}" ]]; then
+  SRC_DIR="${PLUGIN_SLUG}"; MAIN_PATH="${PLUGIN_SLUG}/${MAIN_FILE}"
+elif [[ -f "${MAIN_FILE}" ]]; then
+  SRC_DIR="."; MAIN_PATH="${MAIN_FILE}"
+else
+  die "Cannot find ${MAIN_FILE} (root or ${PLUGIN_SLUG}/)"
+fi
 
 # --- Make sure we’re on main and fetch (but local remains king) ---------------
 step "Prepare git"
@@ -46,46 +54,81 @@ ok "Git ready"
 
 # --- Read current version from header/constant --------------------------------
 step "Read version"
-readver=$(cat <<'PHP'
-$path=$argv[1]; $src=@file_get_contents($path)?:''; $vers=[];
+readver_php=$(cat <<'PHP'
+$path=$argv[1];
+$src=@file_get_contents($path);
+if($src===false){ echo "0.0.0"; exit(0); }
+$vers=[];
 if(preg_match_all('/(?mi)^\s*(?:\*\s*)?Version\s*:\s*([0-9]+\.[0-9]+\.[0-9]+)/',$src,$m)) $vers=array_merge($vers,$m[1]);
-if(preg_match_all("/define\\(\\s*'([A-Z0-9_]+_VERSION)'\\s*,\\s*'([0-9]+\\.[0-9]+\\.[0-9]+)'\\s*\\)\\s*;/",$src,$m)) foreach($m[2] as $v) $vers[]=$v;
-if(!$vers){ echo "0.0.0"; exit; } usort($vers,'version_compare'); echo end($vers);
+if(preg_match_all("/define\\(\\s*'([A-Z0-9_]+_VERSION)'\\s*,\\s*'([0-9]+\\.[0-9]+\\.[0-9]+)'\\s*\\)\\s*;/",$src,$m))
+  foreach($m[2] as $v) $vers[]=$v;
+if(!$vers){ echo "0.0.0"; exit(0); }
+usort($vers,'version_compare');
+echo end($vers);
 PHP
 )
-BASE="$(php -r "$readver" "$MAIN_PATH")"; [[ -n "$BASE" ]] || BASE="0.0.0"
-latest="$(git tag --list 'v*' | sed -n 's/^v\([0-9]\+\.[0-9]\+\.[0-9]\+\)$/\1/p' | sort -V | tail -n1 || true)"
-ver_ge(){ printf '%s\n%s\n' "$1" "$2" | sort -V -r | head -n1 | grep -qx "$1"; }
-[[ -n "${latest:-}" && $(ver_ge "$latest" "$BASE" && echo 1 || echo 0) -eq 1 ]] && BASE="$latest"
+BASE="$(php -r "$readver_php" "$MAIN_PATH" 2>/dev/null || echo "0.0.0")"
+[[ -n "${BASE:-}" ]] || BASE="0.0.0"
 
-IFS=. read -r MA MI PA <<<"$BASE"
-case "$BUMP" in major)((MA++));MI=0;PA=0;; minor)((MI++));PA=0;; patch)((PA++));; esac
-NEXT="${MA}.${MI}.${PA}"; while git rev-parse -q --verify "refs/tags/v$NEXT" >/dev/null 2>&1; do ((PA++)); NEXT="${MA}.${MI}.${PA}"; done
+latest="$(git tag --list 'v*' | sed -n 's/^v\([0-9]\+\.[0-9]\+\.[0-9]\+\)$/\1/p' | sort -V | tail -n1 || true)"
+
+ver_ge() {  # returns 0 if $1 >= $2
+  local hi; hi="$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -n1)"
+  [[ "$hi" == "$1" ]]
+}
+if [[ -n "${latest:-}" ]] && ver_ge "$latest" "$BASE"; then BASE="$latest"; fi
+
+# --- Parse MA.MI.PA robustly --------------------------------------------------
+set +u
+IFS=. read -r MA MI PA <<<"${BASE:-0.0.0}"
+MA=${MA:-0}; MI=${MI:-0}; PA=${PA:-0}
+set -u
+
+case "$BUMP" in
+  major) MA=$((MA+1)); MI=0; PA=0;;
+  minor) MI=$((MI+1)); PA=0;;
+  patch) PA=$((PA+1));;
+esac
+
+NEXT="${MA}.${MI}.${PA}"
+while git rev-parse -q --verify "refs/tags/v$NEXT" >/dev/null 2>&1; do
+  PA=$((PA+1))
+  NEXT="${MA}.${MI}.${PA}"
+done
 ok "Next: v${NEXT}"
 
 # --- Bump Version in main file ------------------------------------------------
 step "Bump ${MAIN_PATH}"
-fix=$(cat <<'PHP'
+fix_php=$(cat <<'PHP'
 $path=$argv[1]; $ver=$argv[2]; $slug=$argv[3];
-$src=file_get_contents($path); $src=preg_replace("/\r\n?/", "\n", $src);
+$src=@file_get_contents($path);
+if($src===false){ $src=''; }
+$src=preg_replace("/\r\n?/", "\n", $src);
 $lines=explode("\n",$src); $s=-1;$e=-1;
 for($i=0;$i<min(400,count($lines));$i++){ if(preg_match("/^\s*\/\*/",$lines[$i])){$s=$i;break;} }
 if($s>=0){ for($j=$s;$j<min($s+120,count($lines));$j++){ if(preg_match("/\*\//",$lines[$j])){$e=$j;break;} } }
-if($s<0||$e<0){ array_splice($lines,0,0,["/*"," * Version: $ver"," */"]); }
-else{ for($k=$s;$k<=$e;$k++){ if(preg_match("/^\s*(?:\*\s*)?Version\s*:/i",$lines[$k])) $lines[$k]=null; }
-      $t=[]; foreach($lines as $ln){ if($ln!==null)$t[]=$ln; } $lines=$t; array_splice($lines,$s+1,0," * Version: $ver"); }
+if($s<0||$e<0){
+  array_splice($lines,0,0,["/*"," * Version: $ver"," */"]);
+}else{
+  for($k=$s;$k<=$e;$k++){ if(preg_match("/^\s*(?:\*\s*)?Version\s*:/i",$lines[$k])) $lines[$k]=null; }
+  $t=[]; foreach($lines as $ln){ if($ln!==null)$t[]=$ln; } $lines=$t;
+  array_splice($lines,$s+1,0," * Version: $ver");
+}
 $src=implode("\n",$lines);
 if(preg_match("/^\\s*define\\(\\s*'([A-Z0-9_]+_VERSION)'\\s*,\\s*'[^']*'\\s*\\)\\s*;/m",$src,$m)){
-  $const=$m[1]; $src=preg_replace("/^\\s*define\\(\\s*'".$const."'\\s*,\\s*'[^']*'\\s*\\)\\s*;/m","define('".$const."','$ver');",$src,1);
-}else{ $const=strtoupper(preg_replace('/[^A-Za-z0-9]+/','_',$slug))."_VERSION";
+  $const=$m[1];
+  $src=preg_replace("/^\\s*define\\(\\s*'".$const."'\\s*,\\s*'[^']*'\\s*\\)\\s*;/m","define('".$const."','$ver');",$src,1);
+}else{
+  $const=strtoupper(preg_replace('/[^A-Za-z0-9]+/','_',$slug))."_VERSION";
   if(preg_match("/defined\\(\\s*'ABSPATH'\\s*\\)/",$src))
     $src=preg_replace("/(defined\\(\\s*'ABSPATH'\\s*\\).*?exit;\\s*)/s","$1\n\ndefine('".$const."','$ver');\n",$src,1);
   else $src="<?php\ndefine('".$const."','$ver');\n?>\n".$src;
 }
-file_put_contents($path,$src);
+@file_put_contents($path,$src);
 PHP
 )
-php -r "$fix" "$MAIN_PATH" "$NEXT" "$PLUGIN_SLUG"
+[[ -f "$MAIN_PATH" ]] || printf "/*\n * Version: %s\n */\n<?php\n" "$BASE" > "$MAIN_PATH"
+php -r "$fix_php" "$MAIN_PATH" "$NEXT" "$PLUGIN_SLUG" 2>/dev/null || true
 
 # --- Stage EVERYTHING and create the bump commit ------------------------------
 git add -A
@@ -97,24 +140,24 @@ TODAY="$(date +%Y-%m-%d)"
 LAST_TAG="$(git describe --tags --abbrev=0 2>/dev/null || echo '')"
 RANGE="${LAST_TAG:+$LAST_TAG..}HEAD"
 
-# Names only, exclude CHANGELOG itself from the list we print
 CHANGED="$(git diff --name-only ${RANGE} | grep -v '^CHANGELOG\.md$' || true)"
 if [[ -z "$CHANGED" && -z "$LAST_TAG" ]]; then
   CHANGED="$(git ls-files | grep -v '^CHANGELOG\.md$' || true)"
 fi
+
 {
   printf "v%s — %s\n\n" "$NEXT" "$TODAY"
+  echo "Changed files:"
   if [[ -n "$CHANGED" ]]; then
-    echo "Changed files:"
     echo "$CHANGED" | sed 's/^/- /'
     echo
   else
-    echo "Changed files:"
     echo "- (none)"
     echo
   fi
   [[ -f CHANGELOG.md ]] && cat CHANGELOG.md
 } > .CHANGELOG.new
+
 mv .CHANGELOG.new CHANGELOG.md
 git add CHANGELOG.md
 git commit -m "chore(release): v${NEXT} (changelog)" >/dev/null 2>&1 || true
@@ -133,15 +176,22 @@ step "Build zip"
 ART="artifacts"; PKG="package/${PLUGIN_SLUG}"; ZIP="${PLUGIN_SLUG}-v${NEXT}.zip"
 rm -rf "$ART" "$PKG"; mkdir -p "$ART" "$PKG"
 EXC=(--exclude ".git/" --exclude "artifacts/" --exclude "package/" --exclude ".github/" --exclude ".DS_Store")
-if [[ "$SRC_DIR" == "." ]]; then rsync -a "${EXC[@]}" ./ "$PKG/"; else rsync -a "${EXC[@]}" "${SRC_DIR}/" "$PKG/"; fi
+if [[ "$SRC_DIR" == "." ]]; then
+  rsync -a "${EXC[@]}" ./ "$PKG/"
+else
+  rsync -a "${EXC[@]}" "${SRC_DIR}/" "$PKG/"
+fi
 ( cd package && zip -qr "../${ART}/${ZIP}" "${PLUGIN_SLUG}" )
 ok "Built ${ART}/${ZIP}"
 
 # --- GitHub release (optional) ------------------------------------------------
 if command -v gh >/dev/null 2>&1; then
   step "GitHub release v${NEXT}"
-  gh release view "v${NEXT}" >/dev/null 2>&1 && gh release upload "v${NEXT}" "${ART}/${ZIP}" --clobber >/dev/null \
-    || gh release create "v${NEXT}" "${ART}/${ZIP}" -t "v${NEXT}" -n "Release ${NEXT}" >/dev/null
+  if gh release view "v${NEXT}" >/dev/null 2>&1; then
+    gh release upload "v${NEXT}" "${ART}/${ZIP}" --clobber >/dev/null
+  else
+    gh release create "v${NEXT}" "${ART}/${ZIP}" -t "v${NEXT}" -n "Release ${NEXT}" >/dev/null
+  fi
   ok "Published"
 else
   warn "gh not installed; skipped GitHub release"
