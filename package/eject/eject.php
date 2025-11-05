@@ -1,6 +1,6 @@
 <?php
 /*
- * Version: 1.0.2
+ * Version: 1.0.1
  * Plugin Name: Eject
  * Description: Vendor ordering and purchase-order management for WooCommerce.
  * Author: Eric Kowalewski
@@ -8,7 +8,10 @@
  * Plugin URI: https://github.com/emkowale/eject
  */
 if (!defined('ABSPATH')) exit;
-define('EJECT_VERSION','1.0.2');
+
+
+
+define('EJECT_VERSION','1.0.1');
 define('EJECT_DIR', plugin_dir_path(__FILE__));
 define('EJECT_URL', plugin_dir_url(__FILE__));
 define('EJECT_VER', '1.0.0');
