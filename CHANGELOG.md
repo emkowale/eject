@@ -1,3 +1,30 @@
+v1.0.2 — 2025-11-05
+
+Changed files:
+- artifacts/eject-v1.0.1.zip
+- eject.php
+- package/eject/CHANGELOG.md
+- package/eject/README.md
+- package/eject/assets/css/admin.css
+- package/eject/assets/js/admin.js
+- package/eject/eject.php
+- package/eject/includes/ajax/class-eject-ajax-run.php
+- package/eject/includes/ajax/class-eject-ajax-scan.php
+- package/eject/includes/ajax/class-eject-ajax-settings.php
+- package/eject/includes/ajax/traits/trait-eject-ajax-run-add.php
+- package/eject/includes/ajax/traits/trait-eject-ajax-run-lines.php
+- package/eject/includes/ajax/traits/trait-eject-ajax-run-status.php
+- package/eject/includes/class-eject-admin.php
+- package/eject/includes/class-eject-ajax.php
+- package/eject/includes/class-eject-cpt.php
+- package/eject/includes/data/class-eject-data.php
+- package/eject/includes/eject-hooks.php
+- package/eject/includes/views/view-pos.php
+- package/eject/includes/views/view-queue.php
+- package/eject/includes/views/view-runs.php
+- package/eject/includes/views/view-settings.php
+- package/eject/release.sh
+
 v1.0.1 — 2025-11-05
 
 Changed files:
