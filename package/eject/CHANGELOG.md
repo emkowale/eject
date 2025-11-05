@@ -1,4 +1,11 @@
-v1.0.2 — 2025-11-05
+v1.0.3 — 2025-11-05
+
+Changed files:
+- artifacts/eject-v1.0.2.zip
+- eject.php
+- package/eject/CHANGELOG.md
+- package/eject/eject.php
+- release.shv1.0.2 — 2025-11-05
 
 Changed files:
 - artifacts/eject-v1.0.1.zip
