@@ -23,6 +23,10 @@ command -v git >/dev/null || die "git not found"
 command -v php >/dev/null || die "php not found"
 command -v zip >/dev/null || die "zip not found"
 command -v rsync >/dev/null || die "rsync not found"
+command -v curl >/dev/null || die "curl not found"
+command -v sed >/dev/null || die "sed not found"
+command -v awk >/dev/null || die "awk not found"
+command -v jq >/dev/null || warn "jq not found (fallbacks to grep/sed for API paths)"
 
 # --- Locate repo root (allow running from one level under) --------------------
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; cd "$ROOT"
@@ -71,12 +75,8 @@ BASE="$(php -r "$readver_php" "$MAIN_PATH" 2>/dev/null || echo "0.0.0")"
 [[ -n "${BASE:-}" ]] || BASE="0.0.0"
 
 latest="$(git tag --list 'v*' | sed -n 's/^v\([0-9]\+\.[0-9]\+\.[0-9]\+\)$/\1/p' | sort -V | tail -n1 || true)"
-
-ver_ge() {  # returns 0 if $1 >= $2
-  local hi; hi="$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -n1)"
-  [[ "$hi" == "$1" ]]
-}
-if [[ -n "${latest:-}" ]] && ver_ge "$latest" "$BASE"; then BASE="$latest"; fi
+ver_ge(){ local hi; hi="$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -n1)"; [[ "$hi" == "$1" ]]; }
+[[ -n "${latest:-}" ]] && ver_ge "$latest" "$BASE" && BASE="$latest"
 
 # --- Parse MA.MI.PA robustly --------------------------------------------------
 set +u
@@ -92,8 +92,7 @@ esac
 
 NEXT="${MA}.${MI}.${PA}"
 while git rev-parse -q --verify "refs/tags/v$NEXT" >/dev/null 2>&1; do
-  PA=$((PA+1))
-  NEXT="${MA}.${MI}.${PA}"
+  PA=$((PA+1)); NEXT="${MA}.${MI}.${PA}"
 done
 ok "Next: v${NEXT}"
 
@@ -186,25 +185,70 @@ fi
 ( cd package && zip -qr "../${ART}/${ZIP}" "${PLUGIN_SLUG}" )
 ok "Built ${ART}/${ZIP}"
 
-# --- GitHub release using NEW_TOP as body -------------------------------------
-if command -v gh >/dev/null 2>&1; then
-  step "GitHub release v${NEXT}"
+# ======================== GitHub Release (gh or API) ==========================
+publish_with_gh() {
+  step "GitHub release v${NEXT} (gh)"
   BODY_FILE=".gh_release_body.md"
-  {
-    printf "%s" "$NEW_TOP"
-    [[ -f CHANGELOG.md ]] && awk 'NR==1{exit} {print}' CHANGELOG.md >/dev/null # keep only NEW_TOP in body
-  } > "$BODY_FILE"
-
-  if gh release view "v${NEXT}" >/dev/null 2>&1; then
-    gh release edit "v${NEXT}" -F "$BODY_FILE" >/dev/null
-    gh release upload "v${NEXT}" "${ART}/${ZIP}" --clobber >/dev/null
+  printf "%s" "$NEW_TOP" > "$BODY_FILE"
+  if gh release view "v${NEXT}" -R "${OWNER}/${REPO}" >/dev/null 2>&1; then
+    gh release edit "v${NEXT}" -F "$BODY_FILE" -R "${OWNER}/${REPO}" >/dev/null
+    gh release upload "v${NEXT}" "${ART}/${ZIP}" --clobber -R "${OWNER}/${REPO}" >/dev/null
   else
-    gh release create "v${NEXT}" "${ART}/${ZIP}" -t "v${NEXT}" -F "$BODY_FILE" >/dev/null
+    gh release create "v${NEXT}" "${ART}/${ZIP}" -t "v${NEXT}" -F "$BODY_FILE" -R "${OWNER}/${REPO}" >/dev/null
   fi
   rm -f "$BODY_FILE"
   ok "Published"
+}
+
+publish_with_api() {
+  [[ -n "${GITHUB_TOKEN:-}" ]] || die "GITHUB_TOKEN not set. Run: export GITHUB_TOKEN=<token-with-repo-scope>"
+
+  API="https://api.github.com"
+  UPAPI="https://uploads.github.com"
+  HDR=(-H "Authorization: token $GITHUB_TOKEN" -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28")
+
+  step "GitHub release v${NEXT} (API)"
+  # 1) Try get release by tag
+  get_json="$(curl -sS "${HDR[@]}" "$API/repos/${OWNER}/${REPO}/releases/tags/v${NEXT}" || true)"
+  if echo "$get_json" | grep -q '"id":'; then
+    rel_id="$(echo "$get_json" | (command -v jq >/dev/null && jq -r '.id') || echo "$get_json" | sed -n 's/.*"id":[ ]*\([0-9]\+\).*/\1/p')"
+    # Update body
+    curl -sS -X PATCH "${HDR[@]}" "$API/repos/${OWNER}/${REPO}/releases/$rel_id" \
+      -d "$(printf '{"name":"v%s","body":%s}' "$NEXT" "$(printf '%s' "$NEW_TOP" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')")" >/dev/null
+  else
+    # Create release
+    create_json="$(curl -sS -X POST "${HDR[@]}" "$API/repos/${OWNER}/${REPO}/releases" \
+      -d "$(printf '{"tag_name":"v%s","name":"v%s","body":%s,"draft":false,"prerelease":false}' "$NEXT" "$NEXT" "$(printf '%s' "$NEW_TOP" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')")")"
+    if ! echo "$create_json" | grep -q '"id":'; then
+      die "Failed to create release via API. Response: $create_json"
+    fi
+    rel_id="$(echo "$create_json" | (command -v jq >/dev/null && jq -r '.id') || echo "$create_json" | sed -n 's/.*"id":[ ]*\([0-9]\+\).*/\1/p')"
+  fi
+
+  # 2) Delete existing asset with same name (if any)
+  assets_json="$(curl -sS "${HDR[@]}" "$API/repos/${OWNER}/${REPO}/releases/$rel_id/assets")"
+  if echo "$assets_json" | grep -q '"name":'; then
+    asset_id="$(echo "$assets_json" | (command -v jq >/dev/null && jq -r --arg n "$ZIP" '.[] | select(.name==$n) | .id') || echo "$assets_json" | grep -oE '{"id":[0-9]+,"name":"[^"]+"}' | grep "\"name\":\"$ZIP\"" | sed -n 's/{"id":\([0-9]\+\).*/\1/p')"
+    if [[ -n "${asset_id:-}" ]]; then
+      curl -sS -X DELETE "${HDR[@]}" "$API/repos/${OWNER}/${REPO}/releases/assets/$asset_id" >/dev/null || true
+    fi
+  fi
+
+  # 3) Upload asset
+  curl -sS -X POST -H "Authorization: token $GITHUB_TOKEN" -H "Content-Type: application/zip" \
+    "$UPAPI/repos/${OWNER}/${REPO}/releases/$rel_id/assets?name=$(printf '%s' "$ZIP" | sed 's/ /%20/g')" \
+    --data-binary @"${ART}/${ZIP}" >/dev/null
+
+  ok "Published"
+}
+
+# Decide path: gh (if authed) else API (if token) else fail with instruction
+if command -v gh >/dev/null 2>&1 && gh auth status -h github.com >/dev/null 2>&1; then
+  publish_with_gh
+elif [[ -n "${GITHUB_TOKEN:-}" ]]; then
+  publish_with_api
 else
-  warn "gh not installed; skipped GitHub release"
+  die "No GitHub auth detected. Either login gh (gh auth login -h github.com -s repo) or export GITHUB_TOKEN=<token-with-repo-scope> and rerun."
 fi
 
 printf "${C2}🎉 Done: artifacts/${ZIP}${C0}\n"
