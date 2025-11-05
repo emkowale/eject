@@ -1,3 +1,27 @@
+v1.0.1 — 2025-11-05
+
+Changed files:
+- README.md
+- assets/css/admin.css
+- assets/js/admin.js
+- eject.php
+- includes/ajax/class-eject-ajax-run.php
+- includes/ajax/class-eject-ajax-scan.php
+- includes/ajax/class-eject-ajax-settings.php
+- includes/ajax/traits/trait-eject-ajax-run-add.php
+- includes/ajax/traits/trait-eject-ajax-run-lines.php
+- includes/ajax/traits/trait-eject-ajax-run-status.php
+- includes/class-eject-admin.php
+- includes/class-eject-ajax.php
+- includes/class-eject-cpt.php
+- includes/data/class-eject-data.php
+- includes/eject-hooks.php
+- includes/views/view-pos.php
+- includes/views/view-queue.php
+- includes/views/view-runs.php
+- includes/views/view-settings.php
+- release.sh
+
 # 🧾 Eject Changelog
 
 All notable changes to **Eject** will be documented in this file.  
