@@ -237,6 +237,13 @@ This project follows [Semantic Versioning](https://semver.org/).
 ---
 
 ## [Unreleased]
+
+## [2.0.3] - 2025-12-09
+
+### Changes
+* chore(release): v2.0.2 (changelog) (f838bbb)
+* chore(release): v2.0.2 (bump) (4f547d6)
+
 ### Planned
 - Vendor email integration for automatic PO dispatch
 - Integration with **Tracks** for work order generation
