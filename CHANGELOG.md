@@ -238,6 +238,12 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.0.4] - 2025-12-09
+
+### Changes
+* chore(release): v2.0.3 (4373388)
+
+
 ## [2.0.3] - 2025-12-09
 
 ### Changes
