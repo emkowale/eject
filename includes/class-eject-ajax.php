@@ -1,52 +1,99 @@
 <?php
 /*
  * File: includes/class-eject-ajax.php
- * Description: AJAX router + guard.
+ * Description: AJAX handlers for generating, deleting, and marking POs ordered.
  */
+
 if (!defined('ABSPATH')) exit;
 
-require_once plugin_dir_path(__FILE__) . 'ajax/class-eject-ajax-scan.php';
-require_once plugin_dir_path(__FILE__) . 'ajax/class-eject-ajax-run.php';
-require_once plugin_dir_path(__FILE__) . 'ajax/class-eject-ajax-settings.php';
-
 class Eject_Ajax {
-    public static function register_endpoints() {
-        $map = [
-            // Queue
-            'eject_scan_orders'       => ['Eject_Ajax_Scan', 'scan_orders'],
-            'eject_dismiss_item'      => ['Eject_Ajax_Scan', 'dismiss_item'],
-            'eject_dismiss_bulk'      => ['Eject_Ajax_Scan', 'dismiss_bulk'],
-
-            // Runs / POs
-            'eject_add_to_run'        => ['Eject_Ajax_Run', 'add_to_run'],
-            'eject_mark_ordered'      => ['Eject_Ajax_Run', 'mark_ordered'],
-            'eject_mark_not_ordered'  => ['Eject_Ajax_Run', 'mark_not_ordered'],
-            'eject_remove_line'       => ['Eject_Ajax_Run', 'remove_line'],
-            'eject_add_exception'     => ['Eject_Ajax_Run', 'add_exception'],
-            'eject_reopen_po'         => ['Eject_Ajax_Run', 'reopen_po'],
-            'eject_delete_or_revert_po' => ['Eject_Ajax_Run', 'delete_or_revert_po'],
-
-            // Settings / utilities
-            'eject_save_settings'     => ['Eject_Ajax_Settings', 'save_settings'],
-            'eject_clear_runs'        => ['Eject_Ajax_Settings', 'clear_runs'],
-            'eject_clear_exceptions'  => ['Eject_Ajax_Settings', 'clear_exceptions'],
-            'eject_export_pos'        => ['Eject_Ajax_Settings', 'export_pos'],
-            'eject_unsuppress_queue'  => ['Eject_Ajax_Settings', 'unsuppress_queue'],
-            'eject_repair_flags'      => ['Eject_Ajax_Settings', 'repair_flags'], // NEW
-        ];
-        foreach ($map as $action => $cb) add_action("wp_ajax_{$action}", $cb);
+    public static function register(): void {
+        add_action('wp_ajax_eject_generate_pos', [self::class, 'generate_pos']);
+        add_action('wp_ajax_eject_delete_po', [self::class, 'delete_po']);
+        add_action('wp_ajax_eject_mark_po_ordered', [self::class, 'mark_po_ordered']);
+        add_action('wp_ajax_eject_prune_po', [self::class, 'prune_po']);
+        add_action('wp_ajax_eject_emergency_cleanup', [self::class, 'emergency_cleanup']);
     }
 
-    public static function guard($cap = 'manage_woocommerce', $nonce_action = 'eject_admin') {
+    public static function generate_pos(): void {
+        self::guard();
+        $result = Eject_Service::create_pos_from_on_hold();
+        wp_send_json_success($result);
+    }
+
+    public static function delete_po(): void {
+        self::guard();
+        $po_id = isset($_POST['po_id']) ? absint($_POST['po_id']) : 0;
+        if (!$po_id) wp_send_json_error(['message' => 'Missing PO ID'], 400);
+        $out = Eject_Service::delete_po($po_id);
+        if (empty($out['success'])) {
+            wp_send_json_error(['message' => $out['message'] ?? 'Failed to delete PO'], 400);
+        }
+        wp_send_json_success(['message' => $out['message'] ?? 'PO deleted']);
+    }
+
+    /** Mark a PO ordered and update related orders. */
+    public static function mark_po_ordered(): void {
+        self::guard();
+        $po_id = isset($_POST['po_id']) ? absint($_POST['po_id']) : 0;
+        $has_unordered = !empty($_POST['has_unordered']);
+        $keep_items = [];
+        if (isset($_POST['keep_items']) && is_array($_POST['keep_items'])) {
+            foreach ($_POST['keep_items'] as $it) {
+                $code  = isset($it['code']) ? sanitize_text_field($it['code']) : '';
+                $color = isset($it['color']) ? sanitize_text_field($it['color']) : '';
+                $size  = isset($it['size']) ? sanitize_text_field($it['size']) : '';
+                if ($code === '' || $color === '' || $size === '') continue;
+                $keep_items[] = ['code' => $code, 'color' => $color, 'size' => $size];
+            }
+        }
+        if (!$po_id) wp_send_json_error(['message' => 'Missing PO ID'], 400);
+        $res = Eject_Service::mark_po_ordered($po_id, $has_unordered, $keep_items);
+        if (empty($res['success'])) {
+            wp_send_json_error(['message' => $res['message'] ?? 'Failed to mark ordered'], 400);
+        }
+        wp_send_json_success(['message' => 'PO marked ordered', 'po_id' => $po_id]);
+    }
+
+    private static function guard(string $cap = 'manage_woocommerce', string $nonce_action = 'eject_admin'): void {
         if (!current_user_can($cap)) wp_send_json_error(['message' => 'Permission denied'], 403);
         $nonce = isset($_REQUEST['_wpnonce']) ? sanitize_text_field($_REQUEST['_wpnonce']) : '';
         if (!wp_verify_nonce($nonce, $nonce_action)) wp_send_json_error(['message' => 'Bad nonce'], 400);
     }
 
-    public static function get_blacklist(): array {
-        $opts = get_option('eject_options', []);
-        $raw  = isset($opts['blacklist']) ? $opts['blacklist'] : '';
-        $list = array_filter(array_map('trim', explode(',', $raw)));
-        return array_map('strtolower', $list);
+    /** Remove selected items from a PO and reset order statuses accordingly. */
+    public static function prune_po(): void {
+        self::guard();
+        $po_id = isset($_POST['po_id']) ? absint($_POST['po_id']) : 0;
+        $items = isset($_POST['items']) ? (array) $_POST['items'] : [];
+        if (!$po_id || empty($items)) {
+            wp_send_json_error(['message' => 'Missing PO ID or items'], 400);
+        }
+        $clean = [];
+        foreach ($items as $it) {
+            $code  = isset($it['code']) ? sanitize_text_field($it['code']) : '';
+            $color = isset($it['color']) ? sanitize_text_field($it['color']) : '';
+            $size  = isset($it['size']) ? sanitize_text_field($it['size']) : '';
+            if ($code === '' || $color === '' || $size === '') continue;
+            $clean[] = ['code' => $code, 'color' => $color, 'size' => $size];
+        }
+        if (empty($clean)) {
+            wp_send_json_error(['message' => 'No valid items to remove'], 400);
+        }
+        $res = Eject_Service::prune_po_items($po_id, $clean);
+        if (empty($res['success'])) {
+            wp_send_json_error(['message' => $res['message'] ?? 'Failed to prune PO'], 400);
+        }
+        wp_send_json_success($res);
+    }
+
+    /** Emergency cleanup to remove duplicate POs and reset selected orders. */
+    public static function emergency_cleanup(): void {
+        self::guard();
+        $res = Eject_Service::emergency_cleanup();
+        if (empty($res['success'])) {
+            wp_send_json_error(['message' => $res['message'] ?? 'Cleanup failed'], 400);
+        }
+        wp_send_json_success($res);
     }
 }

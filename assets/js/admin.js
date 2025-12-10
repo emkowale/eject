@@ -1,220 +1,326 @@
 /*
  * File: assets/js/admin.js
- * Description: Admin interactions (queue scan, buttons, runs, settings).
- * Plugin: Eject
- * Author: Eric Kowalewski
- * Last Updated: 2025-11-04 EDT
+ * Description: Lightweight admin interactions for creating and deleting POs.
  */
 (function($){
-  // ---- mini helpers ---------------------------------------------------------
-  function busy($btn, on){
-    var $sp = $btn.find('.spinner');
-    if(on){ $btn.prop('disabled', true).addClass('is-busy'); $sp.addClass('is-active'); }
-    else  { $btn.prop('disabled', false).removeClass('is-busy'); $sp.removeClass('is-active'); }
-  }
-  function ajaxPost(action, data, $btn){
+  function post(action, data){
     data = data || {};
     data.action = action;
-    var n = $btn && $btn.data('nonce');
-    if(!n && window.EJECT_QUEUE && window.EJECT_QUEUE.nonce) n = window.EJECT_QUEUE.nonce;
-    if(n) data._wpnonce = n;
-    if($btn) busy($btn, true);
-    return $.post(ajaxurl, data).always(function(){ if($btn) busy($btn, false); });
+    data._wpnonce = (window.EJECT_ADMIN && EJECT_ADMIN.nonce) ? EJECT_ADMIN.nonce : '';
+    var url = (window.EJECT_ADMIN && EJECT_ADMIN.ajax_url) ? EJECT_ADMIN.ajax_url : ajaxurl;
+    return $.post(url, data);
   }
-  function downloadJson(filename, obj){
-    var blob = new Blob([JSON.stringify(obj, null, 2)], {type:'application/json'});
-    var url = URL.createObjectURL(blob);
-    var a = document.createElement('a'); a.href = url; a.download = filename; a.click();
-    setTimeout(function(){ URL.revokeObjectURL(url); }, 1000);
+
+  function setBusy($btn, on){
+    var $sp = $('.eject-spinner');
+    if(on){
+      $btn.prop('disabled', true).addClass('is-busy');
+      $sp.addClass('is-active');
+    } else {
+      $btn.prop('disabled', false).removeClass('is-busy');
+      $sp.removeClass('is-active');
+    }
   }
-  function removeRowAndRescan($tr){
-    $tr.addClass('eject-row-removing').fadeOut(120, function(){
-      $(this).remove();
-      ajaxPost('eject_scan_orders', {}, null).done(function(resp){
-        renderQueue(resp && resp.success ? (resp.data.items || []) : []);
+
+  function renderResult(resp){
+    var $wrap = $('#eject-generation-result').empty();
+    if(!resp || !resp.success){ $wrap.text('Unable to build POs.'); return; }
+    var data = resp.data || {};
+
+    if(data.created && data.created.length){
+      var $list = $('<ul class="eject-result-list"></ul>');
+      data.created.forEach(function(r){
+        var txt = 'PO ' + r.po_number + ' for vendor ' + r.vendor + ' (' + r.order_ids.length + ' orders, ' + r.items.length + ' item groups)';
+        $list.append('<li>'+txt+'</li>');
       });
+      $wrap.append('<p><strong>Created:</strong></p>').append($list);
+    } else {
+      $wrap.append('<p>No new POs were created.</p>');
+    }
+
+    if(data.skipped && data.skipped.length){
+      var $skip = $('<ul class="eject-result-list eject-skipped"></ul>');
+      data.skipped.forEach(function(s){
+        var label = s.order_id ? ('Order #' + s.order_id) : 'Item';
+        $skip.append('<li>'+label+': '+(s.reason || 'Skipped')+'</li>');
+      });
+      $wrap.append('<p><strong>Skipped:</strong></p>').append($skip);
+    }
+  }
+
+  $(document).on('click', '#eject-generate-pos', function(e){
+    e.preventDefault();
+    var $btn = $(this);
+    setBusy($btn, true);
+    post('eject_generate_pos', {}).done(function(resp){
+      renderResult(resp);
+      if(resp && resp.success){
+        setTimeout(function(){ location.reload(); }, 800);
+      }
+    }).fail(function(){
+      alert('Generation failed. Check the console for details.');
+    }).always(function(){ setBusy($btn, false); });
+  });
+
+  function bindTap(selector, handler){
+    // Touchend + click with a simple dedupe so iOS taps reliably fire.
+    $(document).on('touchend', selector, function(e){
+      $(this).data('tap-skip-click', true);
+      e.preventDefault();
+      handler.call(this, e);
+      setTimeout(() => { $(this).removeData('tap-skip-click'); }, 400);
+    });
+    $(document).on('click', selector, function(e){
+      if($(this).data('tap-skip-click')) return;
+      handler.call(this, e);
     });
   }
 
-  // ---- QUEUE ---------------------------------------------------------------
-  function renderQueue(items){
-    var $tb = $('#eject-queue-table tbody'); $tb.empty();
-    if(!items || !items.length){
-      $tb.append('<tr class="eject-empty"><td></td><td colspan="8">✅ All current Processing orders have been assigned to vendor runs.</td></tr>');
+  bindTap('.eject-delete-po', function(e){
+    e.preventDefault();
+    if(!confirm('Delete this PO?')) return;
+    var $btn = $(this), po = $btn.data('po');
+    $btn.prop('disabled', true);
+    post('eject_delete_po', {po_id: po}).done(function(resp){
+      if(resp && resp.success){
+        $btn.closest('tr').fadeOut(120, function(){ $(this).remove(); });
+      } else {
+        alert(resp && resp.data && resp.data.message ? resp.data.message : 'Delete failed.');
+      }
+    }).fail(function(){
+      alert('Delete failed.');
+    }).always(function(){ $btn.prop('disabled', false); });
+  });
+
+  bindTap('.eject-po-ordered', function(e){
+    e.preventDefault();
+    var $btn = $(this), $row = $btn.closest('tr');
+    if($btn.prop('disabled')) return;
+    var $checks = $row.find('.eject-size-checkbox');
+    var hasUnordered = false;
+    var keepItems = [];
+    if($checks.length){
+      var total = $checks.length;
+      var checked = $checks.filter(':checked').length;
+      hasUnordered = checked < total;
+      if(checked === 0){
+        return; // should be disabled already, just guard.
+      }
+      $checks.each(function(){
+        if($(this).prop('checked')){
+          keepItems.push({
+            code: $(this).data('code')||'',
+            color: $(this).data('color')||'',
+            size: $(this).data('size')||''
+          });
+        }
+      });
+    }
+    $btn.prop('disabled', true).text('Ordering...');
+    post('eject_mark_po_ordered', {po_id: $btn.data('po'), has_unordered: hasUnordered, keep_items: keepItems})
+      .done(function(resp){
+        if(resp && resp.success){
+          location.reload();
+        } else {
+          alert(resp && resp.data && resp.data.message ? resp.data.message : 'Failed to mark ordered.');
+        }
+      })
+      .fail(function(){ alert('Failed to mark ordered.'); })
+      .always(function(){ $btn.prop('disabled', false).text('Order PO'); });
+  });
+
+  // Enable Order PO when at least one item is checked; flag if any remain unchecked
+  function updateOrderedButton($row){
+    var $btn=$row.find('.eject-po-ordered');
+    var $checks=$row.find('.eject-size-checkbox');
+    if(!$btn.length){ return; }
+    if(!$checks.length){
+      $btn.prop('disabled', false).data('has-unordered', false);
       return;
     }
-    window.EJECT_QUEUE = window.EJECT_QUEUE || {};
-    var nonceAttr = (window.EJECT_QUEUE && window.EJECT_QUEUE.nonce)
-      ? ' data-nonce="'+window.EJECT_QUEUE.nonce+'"' : '';
-    window.EJECT_QUEUE.items = items;
-
-    items.forEach(function(r, i){
-      var vc = r.vendor + '(' + r.vendor_item + ')';
-      var row =
-        '<tr data-idx="'+i+'">' +
-          '<td><input type="checkbox" class="eject-q-chk"></td>' +
-          '<td>#'+r.order_id+'</td>' +
-          '<td>'+(r.customer||'')+'</td>' +
-          '<td>'+vc+'</td>' +
-          '<td>'+(r.item||'')+'</td>' +
-          '<td>'+(r.color||'N/A')+'</td>' +
-          '<td>'+(r.size||'N/A')+'</td>' +
-          '<td>'+(r.qty||0)+'</td>' +
-          '<td>' +
-            '<button class="button eject-add-one"'+nonceAttr+'>Add <span class="spinner"></span></button> ' +
-            '<button class="button eject-dismiss-one"'+nonceAttr+'>Dismiss <span class="spinner"></span></button>' +
-          '</td>' +
-        '</tr>';
-      $tb.append(row);
-    });
+    var checked = $checks.filter(':checked').length;
+    var hasUnordered = checked < $checks.length;
+    $btn.prop('disabled', checked === 0);
+    $btn.data('has-unordered', hasUnordered);
   }
-
-  $(document).on('click', '.eject-dismiss-one', function(e){
-    e.preventDefault();
-    var $b=$(this), $tr=$b.closest('tr'), idx=+$tr.data('idx');
-    var r=(window.EJECT_QUEUE&&window.EJECT_QUEUE.items)?window.EJECT_QUEUE.items[idx]:null;
-    if(!r) return;
-    ajaxPost('eject_dismiss_item',{order_id:r.order_id,item_id:r.item_id},$b).done(function(){
-      removeRowAndRescan($tr);
-    });
+  $(document).on('change', '.eject-size-checkbox', function(){
+    updateOrderedButton($(this).closest('tr'));
+  });
+  $(function(){
+    $('.eject-table tbody tr').each(function(){ updateOrderedButton($(this)); });
   });
 
-  $(document).on('click', '#eject-queue-dismiss-selected', function(e){
+  // Remove selected items from a PO
+  bindTap('.eject-prune-po', function(e){
     e.preventDefault();
-    var $b=$(this), items=[], all=(window.EJECT_QUEUE||{}).items||[];
-    $('#eject-queue-table tbody tr').each(function(){
-      var $tr=$(this);
-      if($tr.find('.eject-q-chk').prop('checked')){
-        var idx=+$tr.data('idx'), r=all[idx];
-        if(r) items.push({order_id:r.order_id,item_id:r.item_id});
-      }
-    });
-    if(!items.length){ alert('Select at least one row.'); return; }
-    ajaxPost('eject_dismiss_bulk',{items:JSON.stringify(items)},$b).done(function(){
-      $('#eject-queue-table tbody tr').each(function(){
-        var $tr=$(this); if($tr.find('.eject-q-chk').prop('checked')) $tr.remove();
-      });
-      ajaxPost('eject_scan_orders',{},null).done(function(resp){
-        renderQueue(resp&&resp.success?(resp.data.items||[]):[]);
-      });
-    });
-  });
-
-  $(document).on('click', '.eject-add-one', function(e){
-    e.preventDefault();
-    var $b=$(this), $tr=$b.closest('tr'), idx=+$tr.data('idx');
-    var r=(window.EJECT_QUEUE&&window.EJECT_QUEUE.items)?window.EJECT_QUEUE.items[idx]:null;
-    if(!r) return;
-    ajaxPost('eject_add_to_run',{
-      order_id:r.order_id, item_id:r.item_id, vendor:r.vendor,
-      item:r.item, color:r.color, size:r.size, qty:r.qty
-    },$b).done(function(){
-      removeRowAndRescan($tr);
-    });
-  });
-
-  $(document).on('change', '#eject-q-all', function(){ $('.eject-q-chk').prop('checked', this.checked); });
-
-  // Bulk add — keep spinner until redirect to Runs (server merges items)
-  $(document).on('click', '#eject-queue-add-selected', function(e){
-    e.preventDefault();
-    var $b=$(this), $sp=$b.find('.spinner');
-    var items=[], all=(window.EJECT_QUEUE||{}).items||[];
-    $('#eject-queue-table tbody tr').each(function(){
-      var $tr=$(this);
-      if($tr.find('.eject-q-chk').prop('checked')){
-        var idx=+$tr.data('idx'), r=all[idx];
-        if(r) items.push({
-          order_id:r.order_id, order_item_id:r.item_id, vendor:r.vendor,
-          item:r.item, color:r.color, size:r.size, qty:r.qty
+    var $btn=$(this), $row=$btn.closest('tr');
+    var po=$btn.data('po');
+    if(!po) return;
+    var selected=[];
+    $row.find('.eject-size-checkbox').each(function(){
+      if($(this).prop('checked')){
+        selected.push({
+          code: $(this).data('code')||'',
+          color: $(this).data('color')||'',
+          size: $(this).data('size')||''
         });
       }
     });
-    if(!items.length){ alert('Select at least one row.'); return; }
+    if(selected.length===0){
+      alert('No items selected to remove.');
+      return;
+    }
+    if(!confirm('Remove '+selected.length+' selected item(s) from this PO and return their orders to On Hold?')) return;
+    $btn.prop('disabled',true).text('Removing...');
+    post('eject_prune_po',{po_id:po, items: selected}).done(function(resp){
+      if(resp && resp.success){
+        location.reload();
+      }else{
+        alert(resp && resp.data && resp.data.message ? resp.data.message : 'Failed to remove.');
+      }
+    }).fail(function(){ alert('Failed to remove.'); })
+      .always(function(){ $btn.prop('disabled',false).text('Remove selected'); });
+  });
 
-    $b.prop('disabled',true).addClass('is-busy'); $sp.addClass('is-active');
-    var data={action:'eject_add_to_run',bulk:1,items:JSON.stringify(items)};
-    var n=(window.EJECT_QUEUE&&EJECT_QUEUE.nonce); if(n) data._wpnonce=n;
-
-    $.post(ajaxurl,data).done(function(resp){
-      if(resp && resp.success){ window.location='admin.php?page=eject-runs'; }
-      else { alert('Add failed.'); $b.prop('disabled',false).removeClass('is-busy'); $sp.removeClass('is-active'); }
-    }).fail(function(){
-      alert('Add failed.'); $b.prop('disabled',false).removeClass('is-busy'); $sp.removeClass('is-active');
+  // Force correct label in case of cached markup
+  $(function(){
+    $('.eject-prune-po').text('Remove selected');
+    // Copy debug block
+    $(document).on('click', '.eject-copy-debug', function(){
+      var txt = $('#eject-debug-block').text() || '';
+      if(!txt){ alert('No debug text to copy'); return; }
+      if(navigator.clipboard && navigator.clipboard.writeText){
+        navigator.clipboard.writeText(txt).then(function(){ alert('Debug copied'); }).catch(function(){
+          if(window.prompt){ window.prompt('Copy debug data:', txt); }
+        });
+      } else {
+        if(window.prompt){ window.prompt('Copy debug data:', txt); }
+      }
+    });
+    // Emergency cleanup
+    $(document).on('click', '.eject-emergency-cleanup', function(){
+      if(!confirm('Emergency cleanup will delete duplicate/empty POs and reset their orders back to On Hold. Continue?')) return;
+      var $btn = $(this);
+      $btn.prop('disabled', true).text('Cleaning...');
+      post('eject_emergency_cleanup', {}).done(function(resp){
+        if(resp && resp.success){
+          alert(resp.data && resp.data.message ? resp.data.message : 'Cleanup complete.');
+          location.reload();
+        } else {
+          alert(resp && resp.data && resp.data.message ? resp.data.message : 'Cleanup failed.');
+        }
+      }).fail(function(){
+        alert('Cleanup failed.');
+      }).always(function(){
+        $btn.prop('disabled', false).text('Emergency cleanup');
+      });
     });
   });
 
+  // ----- Ordered table accordion, search, pagination -----
   $(function(){
-    if($('#eject-queue-table').length){
-      ajaxPost('eject_scan_orders',{},null).done(function(resp){
-        renderQueue(resp&&resp.success?(resp.data.items||[]):[]);
-      });
-    }
-  });
+    var $table = $('.eject-ordered-table');
+    if(!$table.length) return;
 
-  $(document).on('click', '#eject-export-pos', function(e){
-    e.preventDefault();
-    var $b=$(this);
-    ajaxPost('eject_export_pos', {}, $b).done(function(resp){
-      if(resp && resp.success && resp.data && resp.data.data){
-        downloadJson('eject-pos.json', resp.data.data);
-      } else { alert('Export failed.'); }
+    var PAGE_SIZE = 10;
+    var $rows = $table.find('tbody tr.eject-ordered-summary');
+
+    function pair($summary){
+      var id = $summary.data('po');
+      return {
+        summary: $summary,
+        detail: $table.find('tr.eject-ordered-detail[data-po="'+id+'"]')
+      };
+    }
+
+    function hideAllDetails(){
+      $table.find('.eject-ordered-detail').hide();
+      $table.find('.eject-accordion-toggle').attr('aria-expanded', 'false').text('Details');
+    }
+
+    function toggleRow(id){
+      var $summary = $table.find('tr.eject-ordered-summary[data-po="'+id+'"]');
+      var $detail = $table.find('tr.eject-ordered-detail[data-po="'+id+'"]');
+      if(!$summary.length || !$detail.length) return;
+      var expanded = $detail.is(':visible');
+      hideAllDetails();
+      if(!expanded){
+        $detail.show();
+        $summary.find('.eject-accordion-toggle').attr('aria-expanded','true').text('Hide');
+      }
+    }
+
+    function applySearch(){
+      var q = ($('#eject-ordered-search').val() || '').trim().toLowerCase();
+      var visible = [];
+      $rows.each(function(){
+        var $s = $(this);
+        var blob = ($s.data('search') || '').toString().toLowerCase();
+        var match = !q || blob.indexOf(q) !== -1;
+        var p = pair($s);
+        if(match){
+          visible.push($s);
+          $s.show();
+          p.detail.hide(); // keep collapsed until explicitly expanded
+        }else{
+          $s.hide();
+          p.detail.hide();
+        }
+      });
+      buildPagination(visible);
+    }
+
+    function buildPagination(visibleSummaries){
+      var $pager = $('#eject-ordered-pagination');
+      $pager.empty();
+      hideAllDetails();
+      var total = visibleSummaries.length;
+      if(total <= PAGE_SIZE){
+        // show all visible rows
+        visibleSummaries.forEach(function($s){
+          $s.show();
+          pair($s).detail.hide();
+        });
+        return;
+      }
+      var pages = Math.ceil(total / PAGE_SIZE);
+      var current = 1;
+      function renderPage(page){
+        current = page;
+        visibleSummaries.forEach(function($s, idx){
+          var inPage = Math.floor(idx / PAGE_SIZE) + 1 === page;
+          var p = pair($s);
+          $s.toggle(inPage);
+          p.detail.hide();
+        });
+        renderControls();
+      }
+      function renderControls(){
+        $pager.empty();
+        for(var i=1;i<=pages;i++){
+          var $b=$('<button type="button" class="button button-small eject-page-btn"></button>');
+          $b.text(i);
+          if(i===current) $b.addClass('button-primary');
+          (function(page){ $b.on('click', function(){ renderPage(page); }); })(i);
+          $pager.append($b);
+        }
+      }
+      renderPage(1);
+    }
+
+    // Init
+    hideAllDetails();
+    applySearch();
+
+    $(document).on('click', '.eject-accordion-toggle', function(){
+      var id = $(this).closest('tr').data('po');
+      toggleRow(id);
+    });
+
+    $('#eject-ordered-search').on('input', function(){
+      hideAllDetails();
+      applySearch();
     });
   });
 
 })(jQuery);
-
-// ---- SETTINGS: maintenance buttons -----------------------------------------
-jQuery(function($){
-  $(document).on('click', '#eject-clear-runs', function(e){
-    e.preventDefault(); var $b=$(this);
-    ajaxPost('eject_clear_runs', {}, $b).done(function(){ location.reload(); });
-  });
-  $(document).on('click', '#eject-clear-exc', function(e){
-    e.preventDefault(); var $b=$(this);
-    ajaxPost('eject_clear_exceptions', {}, $b).done(function(){ alert('Exceptions cleared'); });
-  });
-  $(document).on('click', '#eject-unsuppress-queue', function(e){
-    e.preventDefault(); var $b=$(this);
-    ajaxPost('eject_unsuppress_queue', {}, $b).done(function(){ location.reload(); });
-  });
-  function ajaxPost(action, data, $btn){
-    data=data||{}; data.action=action;
-    var n=$btn&&$btn.data('nonce');
-    if(!n&&window.EJECT_QUEUE&&window.EJECT_QUEUE.nonce) n=EJECT_QUEUE.nonce;
-    if(n) data._wpnonce=n;
-    if($btn){ var $sp=$btn.find('.spinner'); $btn.prop('disabled',true).addClass('is-busy'); $sp.addClass('is-active'); }
-    return $.post(ajaxurl,data).always(function(){
-      if($btn){ var $sp=$btn.find('.spinner'); $btn.prop('disabled',false).removeClass('is-busy'); $sp.removeClass('is-active'); }
-    });
-  }
-});
-
-// ---- RUNS: Mark Ordered / Not Ordered -> redirect to POs -------------------
-jQuery(function($){
-  function ejBusy($btn,on){ var $sp=$btn.find('.spinner'); if(on){$btn.prop('disabled',true).addClass('is-busy');$sp.addClass('is-active');}else{$btn.prop('disabled',false).removeClass('is-busy');$sp.removeClass('is-active');}}
-  function ejPost(action,data,$btn){ data=data||{}; data.action=action; var n=$btn.data('nonce'); if(!n&&window.EJECT_QUEUE&&EJECT_QUEUE.nonce) n=EJECT_QUEUE.nonce; if(n) data._wpnonce=n; ejBusy($btn,true); return jQuery.post(ajaxurl,data); }
-
-  // Mark Ordered: publish run, then go straight to POs and highlight the new one
-  $(document).on('click','.eject-mark-ordered',function(e){
-    e.preventDefault();
-    var $b=$(this), $card=$b.closest('.eject-vendor-card');
-    ejPost('eject_mark_ordered',{
-      po_id: $card.data('po-id'),
-      vendor: $card.data('vendor')
-    },$b).done(function(resp){
-      if(resp && resp.success && resp.data && resp.data.po_id){
-        window.location = 'admin.php?page=eject-pos&new_po=' + encodeURIComponent(resp.data.po_id);
-      } else { ejBusy($b,false); alert('Mark Ordered failed.'); }
-    }).fail(function(){ ejBusy($b,false); alert('Mark Ordered failed.'); });
-  });
-
-  $(document).on('click','.eject-mark-not-ordered',function(e){
-    e.preventDefault();
-    var $b=$(this), $card=$b.closest('.eject-vendor-card');
-    ejPost('eject_mark_not_ordered',{ po_id:$card.data('po-id') },$b).done(function(resp){
-      if(!(resp && resp.success)) { ejBusy($b,false); alert('Set Not Ordered failed.'); }
-      else location.reload();
-    }).fail(function(){ ejBusy($b,false); alert('Set Not Ordered failed.'); });
-  });
-});

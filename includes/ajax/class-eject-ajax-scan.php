@@ -52,7 +52,6 @@ class Eject_Ajax_Scan {
         $item  = $order ? $order->get_item(intval($_POST['item_id'] ?? 0)) : null;
         if (!$order || !$item) wp_send_json_error(['message'=>'Not found'],404);
         $item->update_meta_data('eject_excluded', 1); $item->save();
-        $order->add_order_note('Eject: Line dismissed from Queue (manually excluded).', 0, true);
         wp_send_json_success(['message'=>'Dismissed']);
     }
 

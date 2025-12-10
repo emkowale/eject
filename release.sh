@@ -251,4 +251,6 @@ else
   die "No GitHub auth detected. Either login gh (gh auth login -h github.com -s repo) or export GITHUB_TOKEN=<token-with-repo-scope> and rerun."
 fi
 
+rm -rf package
+
 printf "${C2}🎉 Done: artifacts/${ZIP}${C0}\n"

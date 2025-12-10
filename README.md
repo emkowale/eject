@@ -1,6 +1,6 @@
 # 🧾 Eject
 
-**Version:** 1.0.0  
+**Version:** 2.0.0-dev  
 **Author:** Eric Kowalewski  
 **Repository:** [github.com/emkowale/eject](https://github.com/emkowale/eject)  
 **Tested up to:** WordPress 6.6.x / WooCommerce 9.x  
@@ -10,8 +10,8 @@
 
 ## 📦 Overview
 
-**Eject** is a WordPress/WooCommerce plugin that automates vendor purchasing and work-order preparation.  
-It scans all new WooCommerce orders entering the **Processing** state, groups items by their **Vendor Code**, and builds purchase orders (POs) per vendor run.
+**Eject** builds vendor purchase orders from WooCommerce **On hold** orders.  
+It looks at every on-hold order, groups line items by vendor code, and generates a PO per vendor with size/color breakdowns.
 
 Each PO tracks items by **Item → Color → Size → Quantity** and marks the linked WooCommerce orders with private notes for traceability.
 
@@ -19,35 +19,29 @@ Each PO tracks items by **Item → Color → Size → Quantity** and marks the l
 
 ## ✳️ Core Features
 
-- Automatically detects *Processing* orders and groups them by vendor  
-- Creates one **PO per vendor per day**, using format `BT-MMDDYYYY-<vendor>-###`  
-- Live “Runs” interface to manage vendor carts before placing an order  
-- Manual “Mark Ordered / Not Ordered” control with WooCommerce admin spinner feedback  
-- Purchase Order history with per-vendor filtering  
-- Lightweight Settings screen for vendor blacklist and permissions  
-- Built on WordPress **custom post types (CPTs)** for durability and backups  
-- Fully mobile-friendly admin interface  
+- Scans all **On hold** orders and groups items by vendor code  
+- Generates PO numbers as `BT-{vendorId}-{MMDDYYYY}-{###}` (sequential per vendor per day)  
+- Breaks each vendor item down by **Color / Size / Qty** using size order `NB,06M,12M,18M,24M,XS,S,M,L,XL,2XL,3XL,4XL,5XL`  
+- Pulls vendor cost from item meta (filterable) to estimate totals  
+- Writes order notes linking WooCommerce orders to the generated PO  
+- Lets you delete a PO (handy for SanMar if you have not hit $200 yet)  
 
 ---
 
-## 🗂 Admin Screens
+## 🗂 Admin Screen
 
 | Screen | Purpose |
 |---------|----------|
-| **Queue** | Intake for new *Processing* orders not yet assigned to a vendor run |
-| **Runs** | Main workspace: grouped by vendor, ready for “Mark Ordered” |
-| **POs** | View or reopen historical purchase orders |
-| **Settings** | Configure vendor blacklist, permissions, and reset tools |
+| **Eject** | Generate POs from on-hold orders and review/delete existing POs |
 
 ---
 
 ## 🧰 Technical Details
 
-- CPT: `eject_run`  
-- Status: `draft` = Not Ordered, `publish` = Ordered  
-- Metadata includes `_vendor_name`, `_po_number`, `_items`, `_exceptions`, `_order_ids`, `_po_date`, `_created_by_user_id`  
-- Hooks into WooCommerce order status changes via `woocommerce_order_status_processing`  
-- AJAX endpoints handle add/remove/mark actions with WooCommerce’s native admin spinner and disabled buttons  
+- CPT: `eject_po`  
+- Metadata includes `_vendor_id`, `_po_number`, `_items` (color/size groups), `_order_ids`, `_po_date`, `_total_cost`  
+- Vendor code and vendor cost are read from order item meta (filterable via `eject_vendor_from_item`, `eject_vendor_item_from_item`, `eject_cost_from_item`)  
+- PO number format: `BT-{vendorId}-{MMDDYYYY}-{###}`, counted per vendor per day  
 
 ---
 
@@ -78,12 +72,7 @@ eject/
 │   ├── class-eject-cpt.php
 │   ├── class-eject-admin.php
 │   ├── class-eject-ajax.php
-│   ├── eject-hooks.php
-│   └── views/
-│       ├── view-queue.php
-│       ├── view-runs.php
-│       ├── view-pos.php
-│       └── view-settings.php
+│   └── class-eject-service.php
 └── assets/
     ├── css/admin.css
     └── js/admin.js
@@ -95,6 +84,7 @@ eject/
 
 | Version | Date | Notes |
 |----------|------|-------|
+| **2.0.0-dev** | 2025-12-04 | Rebuilt for on-hold orders, vendor PO numbering (BT-{vendorId}-{MMDDYYYY}-{###}), and size/color breakdowns. |
 | **1.0.0** | 2025-11-03 | Initial scaffold with CPT, admin UI structure, AJAX stubs, and GitHub auto-update headers. |
 
 ---

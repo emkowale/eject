@@ -1,44 +1,70 @@
 /*
  * File: assets/css/admin.css
- * Description: Minimal admin styles for Eject UI.
- * Plugin: Eject
- * Author: Eric Kowalewski
- * Last Updated: 2025-11-03 EDT
+ * Description: Minimal admin styles for the rebuilt Eject UI.
  */
-.eject-wrap .eject-toolbar { margin: 12px 0; display:flex; gap:8px; flex-wrap:wrap; }
-.eject-table .spinner, .eject-toolbar .spinner { float:none; margin-left:6px; visibility:hidden; }
-.eject-wrap .button.is-busy + .spinner,
-.eject-wrap .button .spinner.is-active { visibility:visible; }
+.eject-wrap h1 { margin-bottom: 16px; }
+.eject-card { background: #fff; border: 1px solid #dcdcde; border-radius: 8px; margin: 16px 0; box-shadow: 0 1px 1px rgba(0,0,0,0.04); }
+.eject-card-header { padding: 14px 16px; border-bottom: 1px solid #f0f0f1; }
+.eject-card-header h2 { margin: 0 0 6px; }
+.eject-card-header p { margin: 0; color: #555; }
+.eject-card-body { padding: 14px 16px; }
+.eject-hint { margin-top: 8px; color: #666; }
+.eject-spinner { float: none; margin-left: 6px; vertical-align: middle; }
+.eject-table td, .eject-table th { vertical-align: top; }
+.eject-order-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.eject-chip { background: #f3f4f5; padding: 2px 8px; border-radius: 12px; font-size: 12px; }
+.eject-item-list { margin: 0; padding-left: 18px; }
+.eject-item-list li { margin: 0 0 4px; }
+.eject-item-list .muted { color: #777; }
+.eject-item-flat { margin: 0; }
+.eject-item-block { margin-bottom: 10px; }
+.eject-item-code { margin-bottom: 4px; font-size: 18px; line-height: 1.2; }
+.eject-item-color { font-weight: 600; margin: 4px 0 2px; }
+.eject-size-lines { display: flex; flex-direction: column; gap: 4px; }
+.eject-size-line { display: inline-flex; align-items: center; gap: 6px; }
+.eject-size-text { display: inline-flex; gap: 4px; align-items: baseline; }
+.eject-size-cost { font-size: 11px; color: #d63638; }
+.eject-size-cost-missing { color: #d63638; }
+.eject-size-checkbox { margin: 0; }
+.eject-action-form { margin-top: 6px; }
+.eject-action-form .button { width: 100%; text-align: center; }
+.eject-po-ordered-row { opacity: 0.8; }
+.eject-result-list { margin: 8px 0; padding-left: 20px; }
+.eject-result-list.eject-skipped { color: #a94442; }
+.eject-wrap .button.is-busy { opacity: 0.8; }
 
-#eject-queue-table td, #eject-queue-table th { vertical-align: middle; }
-#eject-queue-table .eject-empty td { color:#666; }
+/* Ordered accordion */
+.eject-ordered-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+#eject-ordered-search { min-width: 240px; }
+#eject-ordered-pagination { display: flex; gap: 6px; flex-wrap: wrap; }
+.eject-ordered-table .eject-ordered-detail { display: none; }
+.eject-ordered-table .eject-ordered-summary td { padding: 8px 10px; }
+.eject-ordered-table .eject-ordered-detail td { vertical-align: top; border-top: 1px solid #e2e4e7; background: #f9f9f9; padding: 10px; }
+.eject-ordered-table .eject-ordered-detail .eject-ordered-po { font-weight: 600; }
+.eject-ordered-table .eject-ordered-detail .eject-ordered-count,
+.eject-ordered-table .eject-ordered-detail .eject-ordered-cost { white-space: nowrap; }
+.eject-ordered-table .eject-ordered-detail .eject-ordered-actions .button { width: 100%; text-align: center; margin-bottom: 6px; }
+.eject-ordered-table .eject-ordered-detail .eject-ordered-actions .button:last-child { margin-bottom: 0; }
+.eject-ordered-table .eject-ordered-detail .eject-ordered-items { max-height: 360px; overflow-y: auto; padding-right: 4px; min-width: 440px; }
+.eject-ordered-toggle { display: flex; align-items: center; gap: 8px; }
+.eject-ordered-po { font-weight: 600; }
+.eject-accordion-toggle.button-link { padding: 0; }
 
-.eject-vendor-card { border:1px solid #e5e5e5; border-radius:6px; margin:14px 0; background:#fff; }
-.eject-vendor-header { display:flex; align-items:center; gap:8px; padding:10px 12px; border-bottom:1px solid #eee; }
-.eject-vendor-header .vendor-name { margin:0; flex:1; font-size:16px; }
-.eject-vendor-body { padding:10px 12px; }
-.eject-vendor-footer { padding:10px 12px; border-top:1px solid #eee; }
-
-.eject-po-detail { background:#fafafa; }
-.eject-po-detail .po-detail-body { padding:10px 12px; }
-
-.eject-admin-tools { margin-top:16px; display:flex; gap:8px; flex-wrap:wrap; }
-
+/* Mobile tweaks */
+.eject-card-body { overflow-x: auto; }
+.eject-table { min-width: 1000px; }
+.eject-table th:nth-child(5), .eject-table td:nth-child(5) { min-width: 440px; }
+.eject-table th:nth-child(6), .eject-table td:nth-child(6) { min-width: 190px; }
+.eject-size-line { flex-wrap: nowrap; white-space: nowrap; }
+.eject-actions { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
+.eject-actions .button { width: 100%; text-align: center; }
 @media (max-width: 782px) {
-  .eject-vendor-header { flex-wrap:wrap; }
+    .eject-ordered-header { flex-direction: column; align-items: stretch; }
+    #eject-ordered-search { width: 100%; }
+    .eject-table { min-width: 900px; }
+    .eject-ordered-table .eject-ordered-summary td,
+    .eject-ordered-table .eject-ordered-detail td { padding: 8px; }
+    .eject-item-code { font-size: 16px; }
+    .eject-size-text { flex-wrap: nowrap; white-space: nowrap; }
+    .eject-actions { align-items: stretch; }
 }
-
-/* --- NEW: center Add/Dismiss text & smooth row removal --- */
-.eject-wrap .button,
-.eject-wrap .button-primary,
-.eject-wrap .button-secondary {
-  display:inline-flex;
-  align-items:center;
-  justify-content:center;
-  text-align:center;
-}
-
-tr.eject-row-removing { opacity:.4; transition:opacity .15s ease-in; }
-
-/* Small, light version label shown in Eject headings */
-.eject-ver { font-size: 0.9em; color: #777; font-weight: normal; margin-left: 6px; }

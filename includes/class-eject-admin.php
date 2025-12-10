@@ -1,187 +1,361 @@
 <?php
 /*
  * File: includes/class-eject-admin.php
- * Description: Registers the Eject admin menu and loads screen views + single order-level notes on PO creation.
- * Plugin: Eject
- * Author: Eric Kowalewski
- * Last Updated: 2025-11-04 EDT
+ * Description: Admin UI for Eject (scan on-hold orders, generate/delete POs).
  */
 
 if (!defined('ABSPATH')) exit;
 
 class Eject_Admin {
+    public static function register_menu(): void {
+        $cap  = 'manage_woocommerce';
+        $hook = add_menu_page(
+            'Eject',
+            'Eject',
+            $cap,
+            'eject',
+            [self::class, 'render_page'],
+            'dashicons-clipboard',
+            56
+        );
 
-    /** Remove WP/admin/plugin notices on Eject screens only */
-    public static function suppress_admin_notices() {
+        if ($hook) {
+            add_action("load-{$hook}", [self::class, 'suppress_admin_notices']);
+        }
+    }
+
+    /** Hide noisy notices on our screen. */
+    public static function suppress_admin_notices(): void {
         remove_all_actions('admin_notices');
         remove_all_actions('all_admin_notices');
         remove_all_actions('network_admin_notices');
         remove_all_actions('user_admin_notices');
         add_filter('screen_options_show_screen', '__return_false');
-        add_filter('admin_body_class', function ($classes) { return $classes . ' eject-admin-stable'; });
+        add_filter('admin_body_class', function ($classes) { return $classes . ' eject-admin-page'; });
     }
 
-    /** Register top-level menu and subpages */
-    public static function register_menu() {
-        $cap  = 'manage_woocommerce';
-        $hooks = [];
-
-        // Top-level page (defaults to Runs)
-        $hooks[] = add_menu_page(
-            'Eject',
-            'Eject',
-            $cap,
-            'eject',
-            [self::class, 'render_runs'],
-            'dashicons-clipboard',
-            56
-        );
-
-        // Kill WP’s auto-duplicate submenu entry
-        add_action('admin_head', function () { remove_submenu_page('eject', 'eject'); });
-
-        // Explicit submenus
-        $hooks[] = add_submenu_page('eject', 'Queue',    'Queue',    $cap, 'eject-queue',    [self::class, 'render_queue']);
-        $hooks[] = add_submenu_page('eject', 'Runs',     'Runs',     $cap, 'eject-runs',     [self::class, 'render_runs']);
-        $hooks[] = add_submenu_page('eject', 'POs',      'POs',      $cap, 'eject-pos',      [self::class, 'render_pos']);
-        $hooks[] = add_submenu_page('eject', 'Settings', 'Settings', 'administrator', 'eject-settings', [self::class, 'render_settings']);
-
-        foreach ($hooks as $hook) {
-            if ($hook) add_action("load-{$hook}", [self::class, 'suppress_admin_notices']);
+    public static function render_page(): void {
+        if (!current_user_can('manage_woocommerce')) {
+            wp_die('You do not have permission to view this page.');
         }
 
-        // === Notes wiring ===
-        // 1) When a PO is created, log ONE order-level note per vendor per order.
-        add_action('eject/po_created', [self::class, 'on_po_created'], 10, 5);
-
-        // 2) Backstop: suppress old per-item Eject notes if they still get called elsewhere.
-        add_filter('woocommerce_new_order_note_data', [self::class, 'suppress_legacy_per_item_notes'], 10, 2);
-    }
-
-    /** Load view helpers (strict path to /includes/views/) */
-    private static function load_view($view) {
-        $path = trailingslashit(dirname(__DIR__)) . "includes/views/view-{$view}.php";
-        if (file_exists($path)) { include $path; return; }
-        $alt = plugin_dir_path(__FILE__) . "views/view-{$view}.php";
-        if (file_exists($alt)) { include $alt; return; }
-        echo "<div class='wrap'><h2>Missing view: {$view}</h2><p>Expected at:</p><code>{$path}</code><br><code>{$alt}</code></div>";
-    }
-
-    /** Page renders */
-    public static function render_queue()    { self::load_view('queue'); }
-    public static function render_runs()     { self::load_view('runs'); }
-    public static function render_pos()      { self::load_view('pos'); }
-    public static function render_settings() { self::load_view('settings'); }
-
-    /* ---------------------------------------------------------------------
-     * ONE note per vendor per order, when a PO is created
-     * ---------------------------------------------------------------------
-     *
-     * Fire this from your PO creation flow (right after you create the PO):
-     *   do_action('eject/po_created', $order_id, $po_id, $vendor_name_or_id, $assigned_item_ids, $run_id);
-     *
-     * Idempotency: a meta key _eject_vendor_note_{vendorKey} prevents duplicates
-     * within the same order, regardless of repeated PO creations for that vendor.
-     */
-
-    /**
-     * Action handler: write a single order-level note when PO is created.
-     *
-     * @param int|WC_Order $order_or_id      Order or ID
-     * @param int          $po_id            PO ID/number
-     * @param string|int   $vendor           Vendor name or ID
-     * @param array        $line_items       Item IDs or WC_Order_Item objects for this vendor
-     * @param int|null     $run_id           Optional run ID
-     */
-    public static function on_po_created($order_or_id, int $po_id, $vendor, array $line_items = [], ?int $run_id = null): void {
-        $order = self::normalize_order($order_or_id);
-        if (!$order || $po_id <= 0) return;
-
-        $vendor_label = is_numeric($vendor) ? (string)$vendor : (string)$vendor;
-        $vendor_key   = sanitize_key( $vendor_label !== '' ? $vendor_label : 'vendor' );
-
-        // Per-vendor-per-order guard (prevents duplicates)
-        $meta_key = "_eject_vendor_note_{$vendor_key}";
-        if ($order->get_meta($meta_key)) {
-            return;
-        }
-
-        $summary   = self::summarize_items_for_note($order, $line_items, 12);
-        $run_suffix = $run_id ? sprintf(' via Run #%d', (int)$run_id) : '';
-
-        $message = sprintf(
-            'Eject: PO #%d created for %s%s. Items: %s',
-            $po_id,
-            ($vendor_label !== '' ? $vendor_label : 'Vendor'),
-            $run_suffix,
-            ($summary !== '' ? $summary : '—')
-        );
-
-        // Public note, do not email
-        $order->add_order_note($message, false, true);
-        $order->update_meta_data($meta_key, (string)$po_id);
-        $order->save();
-    }
-
-    /** Defensive: block legacy per-item notes that match our old phrasing */
-    public static function suppress_legacy_per_item_notes($data, $order) {
-        // If another part of the plugin still tries to write "Eject: ... line item ..." notes, drop them.
-        if (!empty($data['content']) && preg_match('/^Eject:\s.*line item/i', $data['content'])) {
-            // Return an empty message to cancel; Woo will ignore empty notes.
-            $data['content'] = '';
-        }
-        return $data;
-    }
-
-    /** Resolve order from ID or instance */
-    private static function normalize_order($order_or_id): ?WC_Order {
-        if ($order_or_id instanceof WC_Order) return $order_or_id;
-        $id = absint($order_or_id);
-        if ($id <= 0) return null;
-        $order = wc_get_order($id);
-        return ($order instanceof WC_Order) ? $order : null;
-    }
-
-    /**
-     * Build compact items summary like: "2× Tee – Charcoal/L; 1× Hoodie – Black/XL"
-     *
-     * @param WC_Order $order
-     * @param array    $line_items
-     * @param int      $limit
-     * @return string
-     */
-    private static function summarize_items_for_note(WC_Order $order, array $line_items, int $limit = 12): string {
-        $parts = [];
-        foreach ($line_items as $li) {
-            $item = ($li instanceof WC_Order_Item) ? $li : $order->get_item($li);
-            if (!$item || !method_exists($item, 'get_quantity')) continue;
-
-            $qty  = max(1, (int)$item->get_quantity());
-            $name = trim((string)$item->get_name());
-
-            // Pull a few useful attrs (Color, Size, Print Location) if present
-            $attrs = [];
-            if (method_exists($item, 'get_formatted_meta_data')) {
-                $meta = $item->get_formatted_meta_data('_', true);
-                foreach ($meta as $m) {
-                    $label = trim(wp_strip_all_tags($m->display_key));
-                    $value = trim(wp_strip_all_tags($m->display_value));
-                    if ($label === '' || $value === '') continue;
-                    if (preg_match('/^(color|size|print[\s_-]?location)$/i', $label)) {
-                        $attrs[] = $value;
-                    }
-                }
+        $all_pos = get_posts([
+            'post_type'      => 'eject_po',
+            'post_status'    => ['publish', 'draft'],
+            'numberposts'    => 50,
+            'orderby'        => 'date',
+            'order'          => 'DESC',
+        ]);
+        $pos = [];
+        $pos_ordered = [];
+        foreach ($all_pos as $po) {
+            $is_ordered = (bool) get_post_meta($po->ID, '_ordered', true);
+            if ($is_ordered) {
+                $pos_ordered[] = $po;
+            } else {
+                $pos[] = $po;
             }
-
-            $label = $attrs ? ($name . ' – ' . implode('/', $attrs)) : $name;
-            $parts[] = sprintf('%d× %s', $qty, $label);
         }
+        ?>
+        <div class="wrap eject-wrap">
+            <h1>Eject – Vendor Purchase Orders</h1>
 
-        if (empty($parts)) return '';
-        $out = implode('; ', array_slice($parts, 0, $limit));
-        if (count($parts) > $limit) {
-            $out .= sprintf(' … (+%d more)', count($parts) - $limit);
-        }
-        return $out;
+            <div class="eject-card">
+                <div class="eject-card-header">
+                    <h2>Create POs from On-Hold Orders</h2>
+                    <p>Scans all WooCommerce <strong>On hold</strong> orders, groups items by vendor code, and builds PO numbers using <code>BT-{vendorId}-{MMDDYYYY}-{###}</code>. Cost is pulled from vendor item meta when available.</p>
+                </div>
+                <div class="eject-card-body">
+                    <button class="button button-primary" id="eject-generate-pos">Generate POs now</button>
+                    <span class="spinner eject-spinner"></span>
+                    <div class="eject-hint">Main vendor (SanMar) threshold: you can delete a PO below $200 and rebuild later.</div>
+                    <div id="eject-generation-result"></div>
+                </div>
+            </div>
+
+            <div class="eject-card">
+                <div class="eject-card-header">
+                    <h2>Existing POs</h2>
+                    <p>Each row shows PO number, total cost, linked WooCommerce orders, and item breakdown by Color → Size.</p>
+                </div>
+                <div class="eject-card-body">
+                    <?php if (empty($pos)) : ?>
+                        <p class="description">No POs yet. Generate one above to get started.</p>
+                    <?php else : ?>
+                        <table class="widefat fixed striped eject-table">
+                            <thead>
+                                <tr>
+                                    <th>PO #</th>
+                                    <th>Total Items</th>
+                                    <th>Total Cost</th>
+                                    <th>Orders</th>
+                                    <th>Items</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <?php foreach ($pos as $po) :
+                                    $po_number = get_post_meta($po->ID, '_po_number', true) ?: $po->ID;
+                                    $order_ids = (array) get_post_meta($po->ID, '_order_ids', true);
+                                    $items_raw = get_post_meta($po->ID, '_items', true);
+                                    $items     = $items_raw ? json_decode($items_raw, true) : [];
+                                    if (!is_array($items)) $items = [];
+                                    $total     = (float) get_post_meta($po->ID, '_total_cost', true);
+                                    $total_items = 0;
+                                    foreach ($items as $item) {
+                                        $total_items += isset($item['qty']) ? (int)$item['qty'] : 0;
+                                    }
+                                    $run_id    = get_post_meta($po->ID, '_run_id', true) ?: ('po-'.$po->ID);
+
+                                    // Group items as VendorItem -> Color -> Size => Qty
+                                    $tree = [];
+                                    $size_order = ['NB','06M','12M','18M','24M','XS','S','M','L','XL','2XL','3XL','4XL','5XL'];
+                                    foreach ($items as $item) {
+                                        $code  = $item['vendor_item'] ?? $item['product'] ?? 'Item';
+                                        $color = $item['color'] ?? 'N/A';
+                                        $size  = $item['size'] ?? 'N/A';
+                                        $qty   = (int) ($item['qty'] ?? 0);
+                                        if (!isset($tree[$code])) $tree[$code] = [];
+                                        if (!isset($tree[$code][$color])) $tree[$code][$color] = [];
+                                        if (!isset($tree[$code][$color][$size])) $tree[$code][$color][$size] = 0;
+                                        $tree[$code][$color][$size] += $qty;
+                                    }
+
+                                    // Sort sizes according to desired order
+                                    $sort_sizes = function(array $sizes) use ($size_order): array {
+                                        uksort($sizes, function($a, $b) use ($size_order) {
+                                            $a_i = array_search(strtoupper(trim($a)), $size_order, true);
+                                            $b_i = array_search(strtoupper(trim($b)), $size_order, true);
+                                            $a_i = ($a_i === false) ? 999 : $a_i;
+                                            $b_i = ($b_i === false) ? 999 : $b_i;
+                                            if ($a_i === $b_i) return strcmp($a, $b);
+                                            return $a_i <=> $b_i;
+                                        });
+                                        return $sizes;
+                                    };
+                                    ?>
+                                    <tr data-po-id="<?php echo esc_attr($po->ID); ?>">
+                                        <td><?php echo esc_html($po_number); ?></td>
+                                        <td><?php echo esc_html($total_items); ?></td>
+                                        <td><?php echo wp_kses_post(wc_price($total)); ?></td>
+                                        <td>
+                                            <?php if (!empty($order_ids)) : ?>
+                                                <div class="eject-order-chips">
+                                                    <?php foreach ($order_ids as $oid) : ?>
+                                                        <a class="eject-chip" href="<?php echo esc_url(admin_url('post.php?post=' . absint($oid) . '&action=edit')); ?>" target="_blank" rel="noopener noreferrer">#<?php echo esc_html($oid); ?></a>
+                                                    <?php endforeach; ?>
+                                                </div>
+                                            <?php else : ?>
+                                                <span class="description">—</span>
+                                            <?php endif; ?>
+                                        </td>
+                                        <td>
+                                            <?php if (!empty($tree)) : ?>
+                                                <div class="eject-item-flat">
+                                                    <?php foreach ($tree as $code => $colors) : ?>
+                                                        <div class="eject-item-block">
+                                                            <div class="eject-item-code"><strong><?php echo esc_html($code); ?></strong></div>
+                                                            <?php foreach ($colors as $color => $sizes) : ?>
+                                                                <?php $sizes = $sort_sizes($sizes); ?>
+                                                                <div class="eject-item-color"><?php echo esc_html($color); ?></div>
+                                                                <div class="eject-size-lines">
+                                                                    <?php foreach ($sizes as $size => $qty) : ?>
+                                                                        <?php
+                                                                        // Find unit cost for this vendor item/color/size combo
+                                                                        $unit_cost = null;
+                                                                        foreach ($items as $raw_item) {
+                                                                            $matches_code  = ($raw_item['vendor_item'] ?? '') === $code;
+                                                                            $matches_color = ($raw_item['color'] ?? '') === $color;
+                                                                            $matches_size  = ($raw_item['size'] ?? '') === $size;
+                                                                            if ($matches_code && $matches_color && $matches_size) {
+                                                                                $unit_cost = isset($raw_item['unit_cost']) ? (float)$raw_item['unit_cost'] : null;
+                                                                                break;
+                                                                            }
+                                                                        }
+                                                                        $cost_display = $unit_cost && $unit_cost > 0
+                                                                            ? wc_price($unit_cost)
+                                                                            : '<span class="eject-size-cost-missing">N/A</span>';
+                                                                        ?>
+                                                                        <label class="eject-size-line">
+                                                                            <input type="checkbox" class="eject-size-checkbox" data-code="<?php echo esc_attr($code); ?>" data-color="<?php echo esc_attr($color); ?>" data-size="<?php echo esc_attr($size); ?>" />
+                                                                            <span class="eject-size-text">
+                                                                                <?php echo esc_html($size); ?> – <?php echo esc_html($qty); ?>
+                                                                                <span class="eject-size-cost"><?php echo wp_kses_post($cost_display); ?></span>
+                                                                            </span>
+                                                                        </label>
+                                                                    <?php endforeach; ?>
+                                                                </div>
+                                                            <?php endforeach; ?>
+                                                        </div>
+                                                    <?php endforeach; ?>
+                                                </div>
+                                            <?php else : ?>
+                                                <span class="description">No item breakdown saved.</span>
+                                            <?php endif; ?>
+                                        </td>
+                                        <td>
+                                            <div class="eject-actions">
+                                                <button type="button" class="button button-link-delete eject-delete-po" data-po="<?php echo esc_attr($po->ID); ?>">Delete</button>
+                                                <button type="button" class="button eject-prune-po" data-po="<?php echo esc_attr($po->ID); ?>">Remove selected</button>
+                                                <button type="button" class="button eject-po-ordered" data-po="<?php echo esc_attr($po->ID); ?>">Order PO</button>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                <?php endforeach; ?>
+                            </tbody>
+                        </table>
+                    <?php endif; ?>
+                </div>
+            </div>
+
+            <div class="eject-card">
+                <div class="eject-card-header eject-ordered-header">
+                    <div>
+                        <h2>Ordered POs</h2>
+                        <p>Previously marked as ordered.</p>
+                    </div>
+                    <div class="eject-ordered-controls">
+                        <input type="search" id="eject-ordered-search" placeholder="Search ordered POs" />
+                        <div id="eject-ordered-pagination"></div>
+                    </div>
+                </div>
+                <div class="eject-card-body" id="eject-ordered-body">
+                    <?php if (empty($pos_ordered)) : ?>
+                        <p class="description">No ordered POs yet.</p>
+                    <?php else : ?>
+                        <table class="widefat fixed striped eject-table eject-ordered-table">
+                            <thead>
+                                <tr>
+                                    <th>PO #</th>
+                                    <th>Total Items</th>
+                                    <th>Total Cost</th>
+                                    <th>Orders</th>
+                                    <th>Ordered At</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <?php foreach ($pos_ordered as $po) :
+                                    $po_number = get_post_meta($po->ID, '_po_number', true) ?: $po->ID;
+                                    $order_ids = (array) get_post_meta($po->ID, '_order_ids', true);
+                                    $items_raw = get_post_meta($po->ID, '_items', true);
+                                    $items     = $items_raw ? json_decode($items_raw, true) : [];
+                                    if (!is_array($items)) $items = [];
+                                    $total     = (float) get_post_meta($po->ID, '_total_cost', true);
+                                    $total_items = 0;
+                                    foreach ($items as $item) {
+                                        $total_items += isset($item['qty']) ? (int)$item['qty'] : 0;
+                                    }
+                                    $ordered_at = get_post_meta($po->ID, '_ordered_at', true);
+
+                                    $tree = [];
+                                    $size_order = ['NB','06M','12M','18M','24M','XS','S','M','L','XL','2XL','3XL','4XL','5XL'];
+                                    foreach ($items as $item) {
+                                        $code  = $item['vendor_item'] ?? $item['product'] ?? 'Item';
+                                        $color = $item['color'] ?? 'N/A';
+                                        $size  = $item['size'] ?? 'N/A';
+                                        $qty   = (int) ($item['qty'] ?? 0);
+                                        if (!isset($tree[$code])) $tree[$code] = [];
+                                        if (!isset($tree[$code][$color])) $tree[$code][$color] = [];
+                                        if (!isset($tree[$code][$color][$size])) $tree[$code][$color][$size] = 0;
+                                        $tree[$code][$color][$size] += $qty;
+                                    }
+                                    $sort_sizes = function(array $sizes) use ($size_order): array {
+                                        uksort($sizes, function($a, $b) use ($size_order) {
+                                            $a_i = array_search(strtoupper(trim($a)), $size_order, true);
+                                            $b_i = array_search(strtoupper(trim($b)), $size_order, true);
+                                            $a_i = ($a_i === false) ? 999 : $a_i;
+                                            $b_i = ($b_i === false) ? 999 : $b_i;
+                                            if ($a_i === $b_i) return strcmp($a, $b);
+                                            return $a_i <=> $b_i;
+                                        });
+                                        return $sizes;
+                                    };
+
+                                    $search_blob = strtolower($po_number . ' ' . implode(' ', $order_ids));
+                                    ?>
+                                    <tr class="eject-ordered-summary" data-po="<?php echo esc_attr($po->ID); ?>" data-search="<?php echo esc_attr($search_blob); ?>">
+                                        <td class="eject-ordered-toggle">
+                                            <button type="button" class="button-link eject-accordion-toggle" aria-expanded="false">Details</button>
+                                            <span class="eject-ordered-po"><?php echo esc_html($po_number); ?></span>
+                                        </td>
+                                        <td><?php echo esc_html($total_items); ?></td>
+                                        <td><?php echo wp_kses_post(wc_price($total)); ?></td>
+                                        <td><?php echo !empty($order_ids) ? esc_html(count($order_ids) . ' orders') : '—'; ?></td>
+                                        <td><?php echo esc_html($ordered_at ?: '—'); ?></td>
+                                        <td><span class="description">Expand for actions</span></td>
+                                    </tr>
+                                    <tr class="eject-ordered-detail" data-po="<?php echo esc_attr($po->ID); ?>">
+                                        <td class="eject-ordered-po"><?php echo esc_html($po_number); ?></td>
+                                        <td class="eject-ordered-count"><?php echo esc_html($total_items); ?></td>
+                                        <td class="eject-ordered-cost"><?php echo wp_kses_post(wc_price($total)); ?></td>
+                                        <td class="eject-ordered-orders">
+                                            <?php if (!empty($order_ids)) : ?>
+                                                <div class="eject-order-chips">
+                                                    <?php foreach ($order_ids as $oid) : ?>
+                                                        <a class="eject-chip" href="<?php echo esc_url(admin_url('post.php?post=' . absint($oid) . '&action=edit')); ?>" target="_blank" rel="noopener noreferrer">#<?php echo esc_html($oid); ?></a>
+                                                    <?php endforeach; ?>
+                                                </div>
+                                            <?php else : ?>
+                                                <span class="description">—</span>
+                                            <?php endif; ?>
+                                        </td>
+                                        <td class="eject-ordered-items">
+                                            <?php if (!empty($tree)) : ?>
+                                                <div class="eject-item-flat">
+                                                    <?php foreach ($tree as $code => $colors) : ?>
+                                                        <div class="eject-item-block">
+                                                            <div class="eject-item-code"><strong><?php echo esc_html($code); ?></strong></div>
+                                                            <?php foreach ($colors as $color => $sizes) : ?>
+                                                                <?php $sizes = $sort_sizes($sizes); ?>
+                                                                <div class="eject-item-color"><?php echo esc_html($color); ?></div>
+                                                                <div class="eject-size-lines">
+                                                                    <?php foreach ($sizes as $size => $qty) : ?>
+                                                                        <?php
+                                                                        $unit_cost = null;
+                                                                        foreach ($items as $raw_item) {
+                                                                            $matches_code  = ($raw_item['vendor_item'] ?? '') === $code;
+                                                                            $matches_color = ($raw_item['color'] ?? '') === $color;
+                                                                            $matches_size  = ($raw_item['size'] ?? '') === $size;
+                                                                            if ($matches_code && $matches_color && $matches_size) {
+                                                                                $unit_cost = isset($raw_item['unit_cost']) ? (float)$raw_item['unit_cost'] : null;
+                                                                                break;
+                                                                            }
+                                                                        }
+                                                                        $cost_display = $unit_cost && $unit_cost > 0
+                                                                            ? wc_price($unit_cost)
+                                                                            : '<span class="eject-size-cost-missing">N/A</span>';
+                                                                        ?>
+                                                                        <label class="eject-size-line">
+                                                                            <input type="checkbox" class="eject-size-checkbox" data-code="<?php echo esc_attr($code); ?>" data-color="<?php echo esc_attr($color); ?>" data-size="<?php echo esc_attr($size); ?>" />
+                                                                            <span class="eject-size-text">
+                                                                                <?php echo esc_html($size); ?> – <?php echo esc_html($qty); ?>
+                                                                                <span class="eject-size-cost"><?php echo wp_kses_post($cost_display); ?></span>
+                                                                            </span>
+                                                                        </label>
+                                                                    <?php endforeach; ?>
+                                                                </div>
+                                                            <?php endforeach; ?>
+                                                        </div>
+                                                    <?php endforeach; ?>
+                                                </div>
+                                            <?php else : ?>
+                                                <span class="description">No item breakdown saved.</span>
+                                            <?php endif; ?>
+                                        </td>
+                                        <td class="eject-ordered-actions">
+                                            <button type="button" class="button button-link-delete eject-delete-po" data-po="<?php echo esc_attr($po->ID); ?>">Delete</button>
+                                            <button type="button" class="button eject-prune-po" data-po="<?php echo esc_attr($po->ID); ?>">Remove selected</button>
+                                        </td>
+                                    </tr>
+                                <?php endforeach; ?>
+                            </tbody>
+                        </table>
+                    <?php endif; ?>
+                </div>
+            </div>
+
+        </div>
+        <?php
     }
 }
