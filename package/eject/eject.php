@@ -1,6 +1,6 @@
 <?php
 /*
- * Version: 2.0.2
+ * Version: 2.0.1
  * Plugin Name: Eject
  * Description: Build vendor purchase orders from WooCommerce on-hold orders.
  * Author: Eric Kowalewski
@@ -8,7 +8,7 @@
  */
 
 if (!defined('ABSPATH')) exit;
-define('EJECT_VERSION','2.0.2');
+define('EJECT_VERSION','2.0.1');
 define('EJECT_DIR', plugin_dir_path(__FILE__));
 define('EJECT_URL', plugin_dir_url(__FILE__));
 
