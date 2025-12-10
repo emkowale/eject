@@ -1,4 +1,49 @@
-v2.0.1 — 2025-12-09
+v2.0.2 — 2025-12-09
+
+Changed files:
+- artifacts/eject-v2.0.1.zip
+- eject.php
+- package/eject/CHANGELOG.md
+- package/eject/README.md
+- package/eject/assets/css/admin.css
+- package/eject/assets/js/admin.js
+- package/eject/eject.php
+- package/eject/includes/ajax/class-eject-ajax-run.php
+- package/eject/includes/ajax/class-eject-ajax-scan.php
+- package/eject/includes/ajax/class-eject-ajax-settings.php
+- package/eject/includes/ajax/traits/trait-eject-ajax-run-add.php
+- package/eject/includes/ajax/traits/trait-eject-ajax-run-lines.php
+- package/eject/includes/ajax/traits/trait-eject-ajax-run-status.php
+- package/eject/includes/class-eject-admin.php
+- package/eject/includes/class-eject-ajax.php
+- package/eject/includes/class-eject-cpt.php
+- package/eject/includes/class-eject-service.php
+- package/eject/includes/class-eject-workorders.php
+- package/eject/includes/data/class-eject-data.php
+- package/eject/includes/eject-hooks.php
+- package/eject/includes/fonts/dejavusans.ctg.z
+- package/eject/includes/fonts/dejavusans.php
+- package/eject/includes/fonts/dejavusans.z
+- package/eject/includes/fonts/helvetica.php
+- package/eject/includes/fonts/helvetica.z
+- package/eject/includes/lib/config/tcpdf_config.php
+- package/eject/includes/lib/fpdf.php
+- package/eject/includes/lib/include/barcodes/qrcode.php
+- package/eject/includes/lib/include/tcpdf_colors.php
+- package/eject/includes/lib/include/tcpdf_filters.php
+- package/eject/includes/lib/include/tcpdf_font_data.php
+- package/eject/includes/lib/include/tcpdf_fonts.php
+- package/eject/includes/lib/include/tcpdf_images.php
+- package/eject/includes/lib/include/tcpdf_static.php
+- package/eject/includes/lib/phpqrcode.php
+- package/eject/includes/lib/tcpdf.php
+- package/eject/includes/lib/tcpdf_autoconfig.php
+- package/eject/includes/lib/tcpdf_barcodes_2d.php
+- package/eject/includes/views/view-pos.php
+- package/eject/includes/views/view-queue.php
+- package/eject/includes/views/view-runs.php
+- package/eject/includes/views/view-settings.php
+- package/eject/release.shv2.0.1 — 2025-12-09
 
 Changed files:
 - .gh_release_body.md
